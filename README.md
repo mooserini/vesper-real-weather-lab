@@ -43,24 +43,30 @@ http://127.0.0.1:8765/
 
 The page loads two font stylesheets from jsDelivr and current weather from Open-Meteo, so those features require network access.
 
-## Test
+## Verify
 
-Requires Node.js.
+Requires Node.js 22 or newer. Install the pinned project-local development tools:
 
 ```bash
-node weather-core.test.js
-node --check weather-core.js
+npm ci
 ```
 
-The current suite contains 41 assertions covering:
+Then run the canonical check:
 
-- WMO-to-state resolution;
-- weather-over-wind precedence;
-- independent night lighting;
-- Clear-night motion-profile selection;
-- forecast URL construction;
-- live-example selection;
-- stale-request gating.
+```bash
+npm run verify
+```
+
+That command runs:
+
+- 41 dependency-free core assertions;
+- ESLint over the reusable core, tests, and verifier;
+- HTML validation;
+- Markdown linting;
+- the Clear-night behavior contract;
+- inline-script syntax validation.
+
+Tool versions are pinned in `package-lock.json`; no global linter installation is required.
 
 ## Files
 
@@ -68,6 +74,8 @@ The current suite contains 41 assertions covering:
 index.html            Experience, rendering, controls, and animation engine
 weather-core.js       Reusable weather/state resolution and discovery logic
 weather-core.test.js  Dependency-free Node assertions
+scripts/verify.mjs    Durable behavior and inline-script verifier
+package.json          Canonical test/lint/verification commands
 assets/               Six canonical Vesper PNG assets
 ```
 
