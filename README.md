@@ -81,7 +81,7 @@ assets/               Six canonical Vesper PNG assets
 
 ## Repository status
 
-This folder is a sanitized repository candidate derived from an actively evaluated prototype. It is not wired to deployment and does not contain historical creative receipts. Earlier frozen snapshots remain outside this repository by design.
+This is the official private source repository for current Vesper real-weather development. It is not wired to deployment and does not contain historical creative receipts. Earlier frozen snapshots remain outside this repository by design.
 
 ## Rights and publication
 
