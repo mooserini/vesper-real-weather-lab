@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>VESPER — Real-weather transition lab</title>
+<meta name="description" content="A local derivative that lets real Open-Meteo conditions drive Vesper’s state choreography.">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-serif@latest/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/instrument-serif@latest/400-italic.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@latest/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@latest/500.css">
+
+<style>
+/* ============ registered palette props (animatable gradients) ============ */
+@property --sky1  { syntax:'<color>'; inherits:true; initial-value:#04060f; }
+@property --sky2  { syntax:'<color>'; inherits:true; initial-value:#0a1024; }
+@property --sky3  { syntax:'<color>'; inherits:true; initial-value:#141b36; }
+@property --halo  { syntax:'<color>'; inherits:true; initial-value:#86b6e0; }
+@property --acc   { syntax:'<color>'; inherits:true; initial-value:#8fc7ff; }
+
+:root{
+  --bg:#0a0c11;
+  --ink:#e7e4da;
+  --mut:#8b90a0;
+  --line:rgba(231,228,218,.13);
+  --card:#0e1118;
+  --serif:'Instrument Serif', Georgia, serif;
+  --mono:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+*{ margin:0; padding:0; box-sizing:border-box; }
+html{ scroll-behavior:smooth; }
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:var(--mono); font-size:15px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  transition:
+    --sky1 1.8s ease, --sky2 1.8s ease, --sky3 1.8s ease,
+    --halo 1.8s ease, --acc 1.8s ease;
+}
+button, input{ font-family:inherit; }
+.skip{ position:absolute; left:-999px; top:0; z-index:99; background:#000; color:#fff; padding:8px 14px; }
+.skip:focus{ left:8px; top:8px; }
+
+/* ============ per-state palettes, tuned to the seated bodies ============ */
+body[data-state="clear"]  { --sky1:#6f9ec7; --sky2:#d9b98c; --sky3:#e59a66; --halo:#ffd9a0; --acc:#ffd08a; }
+body[data-state="rainy"]  { --sky1:#17262e; --sky2:#2c4850; --sky3:#3f6468; --halo:#6fd4cf; --acc:#8fe6df; }
+body[data-state="snowy"]  { --sky1:#8ba0b5; --sky2:#b9c6d3; --sky3:#e2eaf1; --halo:#ffffff; --acc:#dff0ff; }
+body[data-state="stormy"] { --sky1:#0a0714; --sky2:#171130; --sky3:#251b46; --halo:#9d8cff; --acc:#b9b2ff; }
+body[data-state="windy"]  { --sky1:#233642; --sky2:#3d5a68; --sky3:#628089; --halo:#cfe8f5; --acc:#a9dcec; }
+/* Lighting is orthogonal to weather: night darkens the sky without erasing rain, snow, storm, or wind. */
+body[data-night="true"] { --sky1:#04060f; --sky2:#0a1024; --sky3:#141b36; --halo:#7895bd; --acc:#8fc7ff; }
+
+/* ============ top bar ============ */
+.topbar{
+  display:flex; justify-content:space-between; align-items:center; gap:12px;
+  padding:14px clamp(16px,4vw,32px);
+  border-bottom:1px solid var(--line);
+  font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--mut);
+}
+.topbar b{ color:var(--ink); font-weight:500; }
+
+/* ============ stage ============ */
+.stage{ position:relative; height:clamp(560px, 92vh, 900px); overflow:hidden; isolation:isolate; }
+.sky{
+  position:absolute; inset:0; z-index:0;
+  background:
+    radial-gradient(120% 60% at 50% 108%, rgba(0,0,0,.28), transparent 60%),
+    linear-gradient(180deg, var(--sky1) 0%, var(--sky2) 58%, var(--sky3) 100%);
+}
+.halo{
+  position:absolute; z-index:1; left:50%; top:50%;
+  width:min(74vmin,580px); height:min(74vmin,580px);
+  transform:translate(-50%,-50%);
+  background:radial-gradient(closest-side, var(--halo), transparent 72%);
+  opacity:.5; pointer-events:none; will-change:transform;
+}
+#fx{ position:absolute; inset:0; z-index:2; width:100%; height:100%; }
+.flash{
+  position:absolute; inset:0; z-index:3; opacity:0; pointer-events:none;
+  background:radial-gradient(circle at 50% 16%, rgba(255,255,255,.95), rgba(205,205,255,.3) 38%, transparent 70%);
+}
+.shadow-el{
+  position:absolute; z-index:3; left:50%; top:68%;
+  width:clamp(120px,18vmin,190px); height:26px;
+  transform:translate(-50%,-50%);
+  background:radial-gradient(closest-side, rgba(0,0,0,.36), transparent 72%);
+  pointer-events:none;
+}
+
+/* figure: two crossfading layers inside the displacement wrapper */
+.figure{
+  position:absolute; z-index:4; left:50%; top:50%;
+  width:clamp(200px, 32vmin, 320px);
+  transform:translate(-50%,-50%);
+  will-change:transform; cursor:pointer; outline:none;
+}
+.figure:focus-visible .skin{ box-shadow:0 0 0 3px var(--acc); border-radius:36%; }
+.skin{
+  position:relative; width:100%; aspect-ratio:1/1;
+  filter:url(#squish) drop-shadow(0 18px 34px rgba(0,0,0,.38));
+}
+.layer{ position:absolute; inset:0; opacity:0; transition:opacity .8s ease; }
+.layer img, .layer svg{
+  display:block; width:100%; height:100%; object-fit:contain;
+  user-select:none; -webkit-user-drag:none;
+  transition:filter 1.8s ease;
+}
+.layer img.night-tint, .layer svg.night-tint{
+  /* moonlight treatment applies to the actual weather body, not only Clear */
+  filter:brightness(.64) saturate(.85) hue-rotate(168deg) contrast(1.03);
+}
+body[data-night="true"] .layer img:not(.night-tint), body[data-night="true"] .layer svg:not(.night-tint){
+  filter:brightness(.70) saturate(.82) hue-rotate(10deg) contrast(1.04);
+}
+
+/* HUD */
+.hud{
+  position:absolute; z-index:7; top:14px; left:14px;
+  background:rgba(6,8,13,.62); border:1px solid rgba(231,228,218,.14);
+  backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  padding:10px 12px; font-size:10.5px; line-height:1.75; color:var(--mut);
+  min-width:170px; pointer-events:none;
+}
+.hud .row{ display:flex; justify-content:space-between; gap:14px; }
+.hud .v{ color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums; }
+.hud .title{ color:var(--acc); letter-spacing:.14em; margin-bottom:6px; transition:color 1.8s ease; }
+
+/* scope */
+.scope-wrap{ position:absolute; z-index:7; top:14px; right:14px; display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; }
+.scope-wrap canvas{
+  width:132px; height:132px;
+  background:rgba(6,8,13,.62); border:1px solid rgba(231,228,218,.14);
+  backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+}
+.scope-wrap span{ font-size:9px; letter-spacing:.22em; color:var(--mut); }
+
+/* say pill */
+.say-pill{
+  position:absolute; z-index:7; left:50%; bottom:96px; transform:translateX(-50%);
+  max-width:min(88vw, 560px);
+  display:flex; align-items:baseline; gap:10px;
+  background:rgba(6,8,13,.6); border:1px solid rgba(231,228,218,.14);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  padding:10px 16px; transition:opacity .26s ease, transform .26s ease;
+}
+.say-pill.swapping{ opacity:0; transform:translateX(-50%) translateY(5px); }
+.say-pill .tag{ font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--acc); flex-shrink:0; transition:color 1.8s ease; }
+.say-pill .line{ font-family:var(--serif); font-style:italic; font-size:17px; color:var(--ink); line-height:1.35; }
+
+/* controls */
+.controls{
+  position:absolute; z-index:8; left:0; right:0; bottom:0;
+  display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:center;
+  padding:14px clamp(12px,3vw,24px) calc(14px + env(safe-area-inset-bottom, 0px));
+  background:linear-gradient(180deg, transparent, rgba(5,7,11,.72) 40%);
+}
+.chip, .tgl{
+  font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--mut);
+  background:rgba(10,13,19,.66); border:1px solid rgba(231,228,218,.18);
+  padding:8px 14px; cursor:pointer;
+  transition:color .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease;
+}
+.chip:hover, .tgl:hover{ color:var(--ink); border-color:rgba(231,228,218,.4); }
+.chip[aria-pressed="true"]{ color:var(--acc); border-color:var(--acc); box-shadow:0 0 18px -4px var(--acc); background:rgba(10,13,19,.85); }
+.tgl[aria-pressed="true"]{ color:var(--ink); border-color:rgba(231,228,218,.5); }
+.controls .sep{ width:1px; height:22px; background:rgba(231,228,218,.18); }
+.place-form{ display:flex; gap:8px; align-items:center; min-width:min(92vw,460px); }
+.place-input{ flex:1; min-width:140px; color:var(--ink); background:rgba(10,13,19,.78); border:1px solid rgba(231,228,218,.24); padding:9px 12px; font-size:12px; outline:none; transition:border-color .2s ease, box-shadow .2s ease; }
+.place-input:focus{ border-color:var(--acc); box-shadow:0 0 18px -7px var(--acc); }
+.place-input::placeholder{ color:var(--mut); }
+.weather-readout{ position:absolute; z-index:7; left:50%; bottom:145px; transform:translateX(-50%); width:min(90vw,620px); text-align:center; pointer-events:none; color:var(--mut); font-size:10.5px; letter-spacing:.08em; }
+.weather-readout strong{ color:var(--ink); font-weight:500; }
+.weather-readout .state{ color:var(--acc); text-transform:uppercase; letter-spacing:.16em; }
+.weather-readout.error{ color:#ffc0b8; }
+.weather-readout.loading{ opacity:.72; }
+.live-picker{ display:flex; flex:1 0 100%; order:10; flex-wrap:wrap; gap:6px; justify-content:center; width:min(94vw,900px); padding-top:4px; }
+.live-picker[hidden]{ display:none; }
+body.live-discovered .say-pill{ bottom:184px; }
+body.live-discovered .weather-readout{ bottom:145px; }
+body.live-discovered .reduced-note{ bottom:158px; }
+.live-example{ font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); background:rgba(10,13,19,.72); border:1px solid rgba(231,228,218,.18); padding:7px 10px; cursor:pointer; }
+.live-example:hover{ color:var(--ink); border-color:var(--acc); }
+.live-example b{ color:var(--acc); font-weight:500; }
+.live-example.missing{ opacity:.42; cursor:default; }
+.discovery-note{ width:100%; text-align:center; font-size:9px; color:var(--mut); letter-spacing:.1em; }
+
+.reduced-note{
+  position:absolute; z-index:7; bottom:70px; left:50%; transform:translateX(-50%);
+  font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--mut);
+  background:rgba(6,8,13,.6); padding:6px 12px; border:1px solid var(--line); display:none;
+}
+body.is-reduced .reduced-note{ display:block; }
+.vignette{ position:absolute; inset:0; z-index:6; pointer-events:none; box-shadow:inset 0 0 140px rgba(0,0,0,.42); }
+
+/* ============ copy sections ============ */
+.wrap{ max-width:900px; margin:0 auto; padding:0 clamp(18px,4vw,32px); }
+section.block{ padding:clamp(56px,9vh,96px) 0; border-top:1px solid var(--line); }
+.eyebrow{ font-size:10.5px; letter-spacing:.24em; text-transform:uppercase; color:var(--mut); margin-bottom:18px; }
+.eyebrow b{ color:var(--acc); font-weight:500; }
+h1{ font-family:var(--serif); font-weight:400; font-size:clamp(2.4rem, 6.4vw, 4.3rem); line-height:1.06; letter-spacing:-.01em; margin-bottom:22px; }
+h1 em{ font-style:italic; color:var(--acc); }
+h2{ font-family:var(--serif); font-weight:400; font-size:clamp(1.7rem, 3.6vw, 2.4rem); margin-bottom:14px; }
+.lede{ color:var(--mut); max-width:64ch; }
+.lede strong{ color:var(--ink); font-weight:500; }
+
+.tenets{ display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); margin-top:44px; border:1px solid var(--line); }
+.tenet{ background:var(--bg); padding:26px 22px; }
+.tenet .n{ font-size:10px; letter-spacing:.2em; color:var(--acc); display:block; margin-bottom:14px; }
+.tenet h3{ font-family:var(--serif); font-weight:400; font-size:1.25rem; margin-bottom:10px; line-height:1.2; }
+.tenet p{ font-size:12.5px; color:var(--mut); }
+
+.notes{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-top:40px; }
+.note{ background:var(--card); border:1px solid var(--line); padding:26px 24px; transition:transform .25s ease, border-color .25s ease; }
+.note:hover{ transform:translateY(-3px); border-color:rgba(231,228,218,.3); }
+.note .n{ font-size:10px; letter-spacing:.22em; color:var(--acc); display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.note h3{ font-family:var(--serif); font-weight:400; font-size:1.3rem; margin-bottom:10px; line-height:1.2; }
+.note p{ font-size:12.5px; color:var(--mut); }
+.note p code{ font-family:var(--mono); font-size:11px; background:rgba(231,228,218,.07); border:1px solid var(--line); padding:1px 6px; color:var(--ink); }
+.st{ font-size:8.5px; letter-spacing:.2em; text-transform:uppercase; padding:2px 7px; border:1px solid; }
+.st.seated{ color:#9fe0b8; border-color:rgba(159,224,184,.45); }
+.st.sketch{ color:var(--mut); border-color:var(--line); }
+
+.sig-table{ width:100%; border-collapse:collapse; margin-top:36px; font-size:12px; }
+.sig-table th, .sig-table td{ text-align:right; padding:11px 12px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; color:var(--mut); }
+.sig-table th:first-child, .sig-table td:first-child{ text-align:left; }
+.sig-table th{ font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink); font-weight:500; }
+.sig-table td:first-child{ color:var(--acc); letter-spacing:.08em; }
+.sig-table tbody tr{ transition:background .2s ease; }
+.sig-table tbody tr:hover{ background:rgba(231,228,218,.04); }
+.sig-foot{ margin-top:16px; font-size:11px; color:var(--mut); }
+
+.plug{ margin-top:34px; display:grid; gap:12px; }
+.plug li{ list-style:none; display:grid; grid-template-columns:130px 1fr; gap:16px; padding:18px 20px; background:var(--card); border:1px solid var(--line); font-size:12.5px; color:var(--mut); }
+.plug li b{ color:var(--ink); font-weight:500; letter-spacing:.08em; font-size:11px; text-transform:uppercase; padding-top:2px; }
+.plug li code{ font-size:11px; color:var(--acc); }
+
+footer{
+  border-top:1px solid var(--line);
+  padding:34px clamp(18px,4vw,32px) calc(40px + env(safe-area-inset-bottom,0px));
+  font-size:11px; color:var(--mut);
+  display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap;
+}
+footer .heart{ color:var(--acc); }
+
+@media (max-width:760px){
+  .tenets{ grid-template-columns:1fr; }
+  .notes{ grid-template-columns:1fr; }
+  .scope-wrap{ display:none; }
+  .hud{ min-width:0; font-size:9.5px; padding:8px 10px; }
+  .hud .row.extra{ display:none; }
+  .say-pill{ bottom:110px; }
+  .plug li{ grid-template-columns:1fr; gap:6px; }
+}
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  .note, .say-pill, .layer{ transition:none; }
+}
+</style>
+</head>
+<body data-state="clear" data-night="true">
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- the squish pass lives outside the figure now, so PNGs warp exactly like the placeholder did -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="squish" x="-25%" y="-25%" width="150%" height="150%">
+    <feTurbulence id="sqTurb" type="fractalNoise" baseFrequency="0.011" numOctaves="2" seed="7" result="n"/>
+    <feDisplacementMap id="sqDisp" in="SourceGraphic" in2="n" scale="0" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<header class="topbar">
+  <span><b>VESPER</b>&nbsp;/ real-weather transition lab</span>
+  <span>local derivative · Open-Meteo</span>
+</header>
+
+<!-- ==================== THE STAGE ==================== -->
+<section class="stage" id="stage" aria-label="Vesper live, with seated assets">
+  <div class="sky"></div>
+  <div class="halo" id="haloEl"></div>
+  <canvas id="fx"></canvas>
+  <div class="flash" id="flashEl"></div>
+  <div class="shadow-el" id="shadowEl"></div>
+
+  <figure class="figure" id="figureEl" tabindex="0" role="button" aria-label="Vesper. Activate for commentary.">
+    <div class="skin" id="skinEl">
+      <div class="layer" id="layerA"></div>
+      <div class="layer" id="layerB"></div>
+    </div>
+  </figure>
+
+  <div class="hud" id="hudEl" aria-hidden="true">
+    <div class="title">CHANNEL TELEMETRY</div>
+    <div class="row"><span>Horizontal X</span><span class="v" id="hudX">+0.0 px</span></div>
+    <div class="row"><span>Vertical Y</span><span class="v" id="hudY">+0.0 px</span></div>
+    <div class="row"><span>Rotation θ</span><span class="v" id="hudR">+0.00°</span></div>
+    <div class="row"><span>Breathing S</span><span class="v" id="hudS">1.000</span></div>
+    <div class="row extra"><span>Envelope</span><span class="v" id="hudMode">ACTIVE</span></div>
+    <div class="row extra"><span>Displacement</span><span class="v" id="hudSq">0.0 px</span></div>
+  </div>
+
+  <div class="scope-wrap" aria-hidden="true">
+    <canvas id="scopeEl" width="264" height="264"></canvas>
+    <span>WANDERING SCOPE</span>
+  </div>
+
+  <div class="say-pill" id="sayPill">
+    <span class="tag">vesper</span>
+    <span class="line" id="sayLine">…</span>
+  </div>
+
+  <div class="weather-readout" id="weatherReadout" aria-live="polite">Type a city and state to let the actual sky choose her body.</div>
+  <div class="reduced-note">reduced motion honored — permanent stillness, by request</div>
+
+  <div class="controls" role="toolbar" aria-label="Location and motion controls">
+    <form class="place-form" id="placeForm">
+      <input class="place-input" id="placeInput" type="search" autocomplete="off" placeholder="City, State — e.g. Portland, Maine" aria-label="City and state">
+      <button class="chip" type="submit" id="placeGo">Read Sky</button>
+      <button class="chip" type="button" id="geoBtn" title="Use this device’s location">Locate Me</button>
+      <button class="chip" type="button" id="discoverBtn" title="Find current real-world examples for each Vesper state">Find Live States</button>
+    </form>
+    <div class="live-picker" id="livePicker" hidden aria-live="polite"></div>
+    <span class="sep" aria-hidden="true"></span>
+    <button class="tgl" id="unitBtn" aria-pressed="true">°F</button>
+    <button class="tgl" id="deformBtn" aria-pressed="false">Deformation: Off</button>
+    <button class="tgl" id="pauseBtn"  aria-pressed="false">Pause Motion</button>
+  </div>
+  <div class="vignette"></div>
+</section>
+
+<!-- ==================== THE READ ==================== -->
+<main id="main">
+<section class="block">
+  <div class="wrap">
+    <div class="eyebrow"><b>01</b> — THE READ, CONFIRMED</div>
+    <h1>Five bodies, one <em>nervous system.</em></h1>
+    <p class="lede">
+      The assets confirm the thesis: you never drew a mascot, you drew <strong>five metabolisms wearing
+      the same soul</strong> — startled storm, smug snow, unfbothered rain, golden idle, leaned wind.
+      v1 seats all five PNGs inside the displacement wrapper, crossfades them like your funnel does,
+      and borrows the golden body for night under moonlight (hue-shifted, dimmed — honest, the way
+      <strong>is_day</strong> was honest). No logo anywhere. On purpose.
+    </p>
+    <div class="tenets">
+      <div class="tenet">
+        <span class="n">T-01</span>
+        <h3>Nervous system, not costume</h3>
+        <p>The faces already carry the emotion; the engine carries the body language. Amplitude, tempo, stillness, squish — the PNGs just make the internal weather visible from the outside.</p>
+      </div>
+      <div class="tenet">
+        <span class="n">T-02</span>
+        <h3>Alive reads as irregular</h3>
+        <p>De-synced periods, asymmetric attack/release, 4–12s holds. The stormy asset even ships baked-in shiver lines — the jitter channel now agrees with the artwork instead of fighting it.</p>
+      </div>
+      <div class="tenet">
+        <span class="n">T-03</span>
+        <h3>Unbranded is a stance</h3>
+        <p>A logo would make it a product; anonymity makes it a weather spirit. The experience is the brand. This page seats that decision into the footer and never asks again.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== WORKING NOTES ==================== -->
+<section class="block">
+  <div class="wrap">
+    <div class="eyebrow"><b>02</b> — WORKING NOTES</div>
+    <h2>What’s seated, what’s still a sketch.</h2>
+    <p class="lede">Status tags are honest. “Seated” means running in the stage above right now.</p>
+    <div class="notes">
+      <article class="note">
+        <span class="n">NOTE 01 <i class="st seated">seated</i></span>
+        <h3>Metabolism per state, crossfade between.</h3>
+        <p>Parameter crossfade (~1.4s) plus a two-layer opacity crossfade for the bodies — the dip-swap-fade funnel from your weather page, upgraded to never cut. Sky dissolves via registered <code>@property</code> colors at the same tempo.</p>
+      </article>
+      <article class="note">
+        <span class="n">NOTE 02 <i class="st seated">seated</i></span>
+        <h3>One noise field, everything drinks from it.</h3>
+        <p>Character drift, rain shear, snow wobble, gust streaks and halo parallax all sample the same seeded fbm. A gust visibly passes through everything at once — most of “alive” is that single trick.</p>
+      </article>
+      <article class="note">
+        <span class="n">NOTE 03 <i class="st seated">seated</i></span>
+        <h3>Stillness is a feature — budget for it.</h3>
+        <p>The snowy asset arrives half-asleep; the engine now agrees. During holds, amplitude eases to zero and the halo dims a touch while weather keeps falling around a creature doing absolutely nothing. Idle ≠ broken.</p>
+      </article>
+      <article class="note">
+        <span class="n">NOTE 04 <i class="st sketch">sketch</i></span>
+        <h3>Telemetry as an easter egg in the app.</h3>
+        <p>Long-press the logo-that-isn’t-a-logo → scope + channel readout slide in. Additive, never required, accessibility intact. Stays a sketch until the weather page wants it.</p>
+      </article>
+      <article class="note">
+        <span class="n">NOTE 05 <i class="st seated">seated</i></span>
+        <h3>Voice on transition, not just on demand.</h3>
+        <p>State flips earn exactly one muttered line in the subtitle strip; taps stay conversational. The difference between ambient and chat is one sentence of restraint.</p>
+      </article>
+      <article class="note">
+        <span class="n">NOTE 06 <i class="st seated">seated</i></span>
+        <h3>The PNGs survive the squish.</h3>
+        <p>Proven live above: <code>feTurbulence + feDisplacementMap</code> sits on the wrapper, so all five assets warp, breathe and settle with zero per-image authoring. Missing file? A drawn placeholder steps in via <code>onerror</code> — the page never breaks.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== SIGNATURES ==================== -->
+<section class="block">
+  <div class="wrap">
+    <div class="eyebrow"><b>03</b> — MOTION SIGNATURES</div>
+    <h2>Per-state metabolism, as run above.</h2>
+    <table class="sig-table">
+      <thead>
+        <tr><th>State</th><th>X ±px</th><th>Y ±px</th><th>θ ±°</th><th>Tempo</th><th>Stillness</th><th>Squish px</th><th>Atmosphere</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>clear</td><td>7</td><td>6</td><td>2.2</td><td>0.85×</td><td>medium</td><td>2.8</td><td>dust motes</td></tr>
+        <tr><td>rainy</td><td>6</td><td>4.5</td><td>1.8</td><td>0.80×</td><td>medium</td><td>3.2</td><td>sheared rain</td></tr>
+        <tr><td>snowy</td><td>5</td><td>6</td><td>1.4</td><td>0.50×</td><td>heavy</td><td>2.6</td><td>noise-driven snow</td></tr>
+        <tr><td>stormy</td><td>11</td><td>9</td><td>3.6</td><td>1.50×</td><td>rare</td><td>5.5</td><td>rain + lightning</td></tr>
+        <tr><td>windy</td><td>13</td><td>5</td><td>3.0</td><td>1.15×</td><td>low</td><td>3.4</td><td>gust streaks</td></tr>
+        <tr><td>night</td><td>5</td><td>4</td><td>1.6</td><td>0.62×</td><td>heavy</td><td>2.2</td><td>twinkling stars</td></tr>
+      </tbody>
+    </table>
+    <p class="sig-foot">Channel periods de-synchronized by design — X ≈ 8.7s · Y ≈ 12.1s · θ ≈ 10.5s · S ≈ 17.4s — no composite loop for minutes.</p>
+  </div>
+</section>
+
+<!-- ==================== ASSET SEATING ==================== -->
+<section class="block">
+  <div class="wrap">
+    <div class="eyebrow"><b>04</b> — ASSET SEATING</div>
+    <h2>Where each body stands.</h2>
+    <ul class="plug">
+      <li><b>Five bodies</b><span><code>clear / rainy / snowy / stormy / windy</code> → your five PNGs, referenced by filename in one <code>ASSET_FILES</code> map at the top of the script. Rename there if your filenames differ; nothing else moves.</span></li>
+      <li><b>Night</b><span>Borrows the golden clear body under <code>brightness(.64) · hue-rotate(168°)</code> — moonlight, not a seventh drawing. Same honesty as <code>is_day</code> driving night in the weather page.</span></li>
+      <li><b>Fallback</b><span>Any missing file triggers <code>onerror</code> → a drawn placeholder ghost seats itself in that layer. The stage degrades gracefully, never blank.</span></li>
+      <li><b>No logo</b><span>Referenced nowhere, requested nowhere. An experience doesn’t wear a badge. <span class="heart">♥</span></span></li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <span>Real current conditions from Open-Meteo; client-side only.</span>
+  <span>unbranded on purpose — it’s an experience, not a product. <span class="heart">♥</span></span>
+</footer>
+
+<script src="weather-core.js"></script>
+<script>
+(function(){
+'use strict';
+
+/* ============ asset seating: rename here if your filenames differ ============ */
+const ASSET_FILES = {
+  clear:  'assets/Vesper Sunny Clear.png',
+  rainy:  'assets/Vesper Rainy Drizzle.png',
+  snowy:  'assets/Vesper Snowy Cold.png',
+  stormy: 'assets/Vesper Stormy.png',
+  windy:  'assets/Vesper Windy.png',
+  night:  'assets/Vesper Sunny Clear.png'   /* night borrows clear, moonlit via CSS */
+};
+const ASSET_STATUS = {}; /* src -> true|false after first load attempt */
+
+/* ============ seeded correlated noise ============ */
+function makeNoise(seed){
+  const s = (seed >>> 0) || 1;
+  function hash(n){
+    let x = Math.imul(n ^ s, 0x9E3779B1);
+    x = Math.imul(x ^ (x >>> 15), 0x85EBCA77);
+    x ^= x >>> 13;
+    x = Math.imul(x, 0xC2B2AE3D);
+    x ^= x >>> 16;
+    return (x >>> 0) / 4294967296;
+  }
+  return function(t){
+    const i = Math.floor(t), f = t - i;
+    const u = f * f * f * (f * (f * 6 - 15) + 10);
+    const a = hash(i), b = hash(i + 1);
+    return (a + (b - a) * u) * 2 - 1;
+  };
+}
+const nz = makeNoise(20260812);
+function fbm(t, oct){
+  let sum = 0, amp = 1, f = 1, norm = 0;
+  for(let o = 0; o < oct; o++){ sum += nz(t * f + o * 101.3) * amp; norm += amp; amp *= 0.55; f *= 2.02; }
+  return sum / norm;
+}
+const clamp01 = v => v < 0 ? 0 : (v > 1 ? 1 : v);
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const smoothTo = (cur, tgt, dt, tau) => cur + (tgt - cur) * (1 - Math.exp(-dt / tau));
+function shape(n){ return n >= 0 ? Math.pow(n, 0.72) : -Math.pow(-n, 1.35); }
+
+/* ============ metabolism + voice ============ */
+const PROFILES = {
+  night:  { ampX:5,  ampY:4,   ampR:1.6, ampS:0.020, tempo:0.62, still:0.68, squish:2.2, jitter:0,   particle:'stars' },
+  clear:  { ampX:7,  ampY:6,   ampR:2.2, ampS:0.028, tempo:0.85, still:0.50, squish:2.8, jitter:0,   particle:'motes' },
+  rainy:  { ampX:6,  ampY:4.5, ampR:1.8, ampS:0.024, tempo:0.80, still:0.55, squish:3.2, jitter:0,   particle:'rain'  },
+  snowy:  { ampX:5,  ampY:6,   ampR:1.4, ampS:0.030, tempo:0.50, still:0.78, squish:2.6, jitter:0,   particle:'snow'  },
+  stormy: { ampX:11, ampY:9,   ampR:3.6, ampS:0.040, tempo:1.50, still:0.12, squish:5.5, jitter:1.4, particle:'rain'  },
+  windy:  { ampX:13, ampY:5,   ampR:3.0, ampS:0.022, tempo:1.15, still:0.30, squish:3.4, jitter:0.5, particle:'wind'  }
+};
+const POP_TARGET = { rainy:{rain:130}, stormy:{rain:210}, snowy:{snow:85}, windy:{streak:22}, clear:{mote:24}, night:{star:80} };
+const LINES = {
+  night:  ["dark. my favorite kind of weather: none.","stars. they're doing fine without my input.","the moon again. we don't talk."],
+  clear:  ["sun's out. i'll be minimally useful.","blue sky. aggressively pleasant. fine.","a good day to do one thing slowly."],
+  rainy:  ["rain. the sky is doing my job for me.","wet again. i remain unbothered and slightly damp.","umbrellas are a cry for help, but go ahead."],
+  snowy:  ["snow. i intend to match it, effort-wise.","everything quiet. finally, some competition.","cold. i'm not complaining. i'm just saying it, at length."],
+  stormy: ["thunder. the sky is having a moment.","lightning. show-off.","i'd brace myself, but that sounds like work."],
+  windy:  ["wind. i'm being leaned at on purpose.","hold onto something. or don't.","the trees are overreacting. beautifully."]
+};
+const ASIDES = ["oh. we're doing this now.","noted. adjusting.","mhm. new sky. fine by me.","right. this again."];
+
+/* ============ engine state ============ */
+const CHANNELS = {
+  x:{ period:8.7,  off:11.3  },
+  y:{ period:12.1, off:57.9  },
+  r:{ period:10.5, off:131.7 },
+  s:{ period:17.4, off:211.1 }
+};
+const eng = {
+  state:'clear',
+  ampX:5, ampY:4, ampR:1.6, ampS:0.020, tempo:0.62, still:0.68, squish:2.2, jitter:0,
+  simT: rand(0, 400), mode:'active', stillUntil:0, presence:1,
+  ch:{ x:{v:0}, y:{v:0}, r:{v:0}, s:{v:0} },
+  x:0, y:0, r:0, sc:1, px:0, py:0, speed:0,
+  paused:false, deform:false, reduced:false, isNight:true,
+  flash:0, nextFlash:4, scopePts:[]
+};
+
+/* ============ dom ============ */
+const $ = id => document.getElementById(id);
+const body = document.body;
+const figureEl = $('figureEl'), haloEl = $('haloEl'), shadowEl = $('shadowEl');
+const flashEl = $('flashEl'), stageEl = document.querySelector('.stage');
+const layerA = $('layerA'), layerB = $('layerB');
+const sqTurb = $('sqTurb'), sqDisp = $('sqDisp');
+const hudX = $('hudX'), hudY = $('hudY'), hudR = $('hudR'), hudS = $('hudS'), hudMode = $('hudMode'), hudSq = $('hudSq');
+const sayPill = $('sayPill'), sayLine = $('sayLine');
+const fx = $('fx'), fctx = fx.getContext('2d');
+const scopeEl = $('scopeEl'), sctx = scopeEl.getContext('2d');
+const weatherReadout = $('weatherReadout'), placeInput = $('placeInput');
+let stageW = 0, stageH = 0, dpr = 1;
+let weatherUnit = localStorage.getItem('vesper-weather-unit') || 'fahrenheit';
+let currentPlace = null;
+const weatherGate = VesperWeatherCore.createLatestGate();
+
+function resize(){
+  const rect = stageEl.getBoundingClientRect();
+  stageW = rect.width; stageH = rect.height;
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  fx.width = stageW * dpr; fx.height = stageH * dpr;
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ============ layers: seated PNGs, drawn placeholder on onerror ============ */
+const FALLBACK_SVG =
+ '<svg viewBox="0 0 240 268" aria-hidden="true">' +
+ '<path d="M120 30 C 165 30, 194 66, 196 112 C 198 158, 187 194, 177 213 Q 170 228, 153 223 Q 141 236, 122 231 Q 103 238, 91 225 Q 71 231, 62 214 C 52 195, 42 158, 44 112 C 46 66, 75 30, 120 30 Z" fill="#dfe3ec"/>' +
+ '<circle cx="95" cy="122" r="7" fill="#141826"/><circle cx="145" cy="122" r="7" fill="#141826"/>' +
+ '<path d="M107 150 q 13 9 26 0" fill="none" stroke="#141826" stroke-width="3.4" stroke-linecap="round"/></svg>';
+
+function fillLayer(layer, st){
+  const src = ASSET_FILES[st];
+  layer.innerHTML = '';
+  if(ASSET_STATUS[src] === false){
+    layer.innerHTML = FALLBACK_SVG;
+    if(st === 'night') layer.firstChild.classList.add('night-tint');
+    return;
+  }
+  const img = new Image();
+  img.alt = 'Vesper, ' + st;
+  img.draggable = false;
+  if(st === 'night') img.classList.add('night-tint');
+  img.onload  = () => { ASSET_STATUS[src] = true; };
+  img.onerror = () => {
+    ASSET_STATUS[src] = false;
+    layer.innerHTML = FALLBACK_SVG;
+    if(st === 'night' && layer.firstChild) layer.firstChild.classList.add('night-tint');
+  };
+  img.src = src;
+  layer.appendChild(img);
+}
+/* preload all bodies so swaps never flicker */
+Object.keys(ASSET_FILES).forEach(k => { const p = new Image(); p.src = ASSET_FILES[k]; });
+
+let front = layerA;
+function showState(st, isNight){
+  const back = (front === layerA) ? layerB : layerA;
+  fillLayer(back, st);
+  const seated = back.querySelector('img,svg');
+  if(seated && isNight && st === 'clear') seated.classList.add('night-tint');
+  void back.offsetWidth; /* commit swap before fading */
+  back.style.opacity = 1;
+  front.style.opacity = 0;
+  front = back;
+}
+
+/* ============ voice ============ */
+let sayTimer = null;
+function say(txt){
+  sayPill.classList.add('swapping');
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => {
+    sayLine.textContent = txt; /* textContent only — the XSS boundary stands */
+    sayPill.classList.remove('swapping');
+  }, 260);
+}
+
+/* ============ particles ============ */
+const parts = [];
+function spawnFor(type){
+  const p = { type, fade:0, dying:false };
+  if(type === 'rain'){ p.x = rand(-40, stageW + 40); p.y = rand(-stageH * 0.3, -10); p.vy = rand(430, 640); p.len = rand(9, 18); }
+  else if(type === 'snow'){ p.x = rand(0, stageW); p.y = rand(-30, -6); p.vy = rand(18, 42); p.r = rand(1.1, 3.1); p.phase = rand(0, 100); }
+  else if(type === 'streak'){ p.x = rand(-160, -20); p.y = rand(stageH * 0.08, stageH * 0.82); p.vx = rand(300, 620); p.len = rand(40, 95); p.alpha = rand(0.08, 0.2); }
+  else if(type === 'mote'){ p.x = rand(0, stageW); p.y = rand(stageH * 0.25, stageH * 0.95); p.vy = rand(4, 9); p.r = rand(0.7, 1.8); p.phase = rand(0, 100); }
+  else { p.x = rand(0, stageW); p.y = rand(0, stageH * 0.62); p.r = rand(0.5, 1.5); p.tw = rand(0.5, 2.2); p.phase = rand(0, 100); }
+  return p;
+}
+function countType(t){ let n = 0; for(const p of parts){ if(p.type === t && !p.dying) n++; } return n; }
+function markFading(types){ for(const p of parts){ if(types.indexOf(p.type) !== -1) p.dying = true; } }
+function updateParticles(dt){
+  const particleState = (eng.state === 'clear' && eng.isNight) ? 'night' : eng.state;
+  const target = POP_TARGET[particleState] || {};
+  let budget = 6;
+  for(const t in target){
+    const need = target[t] - countType(t);
+    const n = Math.min(budget, Math.max(0, need), need > 40 ? 8 : 3);
+    for(let i = 0; i < n; i++){ parts.push(spawnFor(t)); budget--; }
+  }
+  const shear = eng.ampX > 0 ? eng.x / eng.ampX : 0; /* one nervous system: channel drives weather */
+  for(let i = parts.length - 1; i >= 0; i--){
+    const p = parts[i];
+    if(p.dying) p.fade -= dt * 1.6; else p.fade = Math.min(1, p.fade + dt * 2);
+    if(p.type === 'rain'){ p.x += (shear * (eng.state === 'stormy' ? 260 : 90) + 14) * dt; p.y += p.vy * dt; if(p.y > stageH + 24) p.fade = 0; }
+    else if(p.type === 'snow'){ p.x += (nz(p.phase + eng.simT * 0.28) * 14 + eng.x * 1.6) * dt; p.y += p.vy * dt; if(p.y > stageH + 10) p.fade = 0; }
+    else if(p.type === 'streak'){ p.x += (p.vx + eng.x * 14) * dt; if(p.x > stageW + 120) p.fade = 0; }
+    else if(p.type === 'mote'){ p.y -= p.vy * dt; p.x += nz(p.phase + eng.simT * 0.2) * 6 * dt; if(p.y < stageH * 0.1) p.fade = 0; }
+    if(p.fade <= 0) parts.splice(i, 1);
+  }
+}
+function drawParticles(){
+  fctx.clearRect(0, 0, stageW, stageH);
+  const acc = getComputedStyle(body).getPropertyValue('--acc').trim() || '#8fc7ff';
+  for(const p of parts){
+    const a = clamp01(p.fade);
+    if(p.type === 'rain'){
+      fctx.strokeStyle = 'rgba(185,215,225,' + (0.42 * a).toFixed(3) + ')';
+      fctx.lineWidth = 1;
+      const sl = eng.state === 'stormy' ? 0.32 : 0.14;
+      fctx.beginPath(); fctx.moveTo(p.x, p.y); fctx.lineTo(p.x - p.len * sl, p.y - p.len); fctx.stroke();
+    } else if(p.type === 'snow'){
+      fctx.fillStyle = 'rgba(240,246,252,' + (0.75 * a).toFixed(3) + ')';
+      fctx.beginPath(); fctx.arc(p.x, p.y, p.r, 0, 6.2832); fctx.fill();
+    } else if(p.type === 'streak'){
+      const g = fctx.createLinearGradient(p.x - p.len, p.y, p.x, p.y);
+      g.addColorStop(0, 'rgba(220,235,240,0)');
+      g.addColorStop(1, 'rgba(220,235,240,' + (p.alpha * a).toFixed(3) + ')');
+      fctx.strokeStyle = g; fctx.lineWidth = 1.4;
+      fctx.beginPath(); fctx.moveTo(p.x - p.len, p.y); fctx.lineTo(p.x, p.y); fctx.stroke();
+    } else if(p.type === 'mote'){
+      const tw = 0.35 + 0.3 * Math.sin(eng.simT * 1.3 + p.phase);
+      fctx.fillStyle = 'rgba(255,240,210,' + (tw * a).toFixed(3) + ')';
+      fctx.beginPath(); fctx.arc(p.x, p.y, p.r, 0, 6.2832); fctx.fill();
+    } else {
+      const tw = 0.22 + 0.55 * (0.5 + 0.5 * Math.sin(eng.simT * p.tw + p.phase));
+      fctx.fillStyle = 'rgba(235,242,255,' + (tw * a).toFixed(3) + ')';
+      fctx.beginPath(); fctx.arc(p.x, p.y, p.r, 0, 6.2832); fctx.fill();
+    }
+  }
+  return acc;
+}
+
+/* ============ scope ============ */
+function drawScope(acc){
+  const w = 264, cx = w / 2, cy = w / 2;
+  sctx.fillStyle = 'rgba(5,8,13,0.28)'; sctx.fillRect(0, 0, w, w);
+  sctx.strokeStyle = 'rgba(140,160,190,0.16)'; sctx.lineWidth = 1;
+  [22, 44, 66, 88, 110].forEach(rr => { sctx.beginPath(); sctx.arc(cx, cy, rr, 0, 6.2832); sctx.stroke(); });
+  sctx.beginPath(); sctx.moveTo(cx, 12); sctx.lineTo(cx, w - 12); sctx.moveTo(12, cy); sctx.lineTo(w - 12, cy); sctx.stroke();
+  if(!eng.reduced){
+    eng.scopePts.push({ x: eng.x, y: eng.y });
+    if(eng.scopePts.length > 130) eng.scopePts.shift();
+    const k = 7.2;
+    sctx.lineWidth = 1.6;
+    for(let i = 1; i < eng.scopePts.length; i++){
+      const q0 = eng.scopePts[i - 1], q1 = eng.scopePts[i];
+      sctx.strokeStyle = 'rgba(200,215,235,' + ((i / eng.scopePts.length) * 0.55).toFixed(3) + ')';
+      sctx.beginPath(); sctx.moveTo(cx + q0.x * k, cy + q0.y * k); sctx.lineTo(cx + q1.x * k, cy + q1.y * k); sctx.stroke();
+    }
+    const lastPt = eng.scopePts[eng.scopePts.length - 1];
+    sctx.fillStyle = acc;
+    sctx.beginPath(); sctx.arc(cx + lastPt.x * k, cy + lastPt.y * k, 3.4, 0, 6.2832); sctx.fill();
+  }
+}
+
+/* ============ reduced motion ============ */
+const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+function applyReduced(){
+  eng.reduced = mq.matches;
+  body.classList.toggle('is-reduced', eng.reduced);
+  if(eng.reduced){
+    figureEl.style.transform = 'translate(-50%,-50%)';
+    sqDisp.setAttribute('scale', '0');
+    parts.length = 0;
+    fctx.clearRect(0, 0, stageW, stageH);
+  }
+}
+if(mq.addEventListener) mq.addEventListener('change', applyReduced);
+applyReduced();
+
+/* ============ controls ============ */
+function setState(name, isNight = false){
+  if(!PROFILES[name]) return;
+  const changed = name !== eng.state || Boolean(isNight) !== eng.isNight;
+  if(!changed) return;
+  eng.state = name;
+  eng.isNight = Boolean(isNight);
+  body.dataset.state = name;
+  body.dataset.night = eng.isNight ? 'true' : 'false';
+  markFading(['star', 'mote', 'streak']);
+  showState(name, eng.isNight);
+  const lineState = (name === 'clear' && eng.isNight) ? 'night' : name;
+  setTimeout(() => say(Math.random() < 0.45 ? pick(ASIDES) : pick(LINES[lineState])), 420);
+}
+function setWeatherStatus(text, kind){
+  weatherReadout.textContent = text;
+  weatherReadout.className = 'weather-readout' + (kind ? ' ' + kind : '');
+}
+async function geocodePlace(query){
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+  url.searchParams.set('name', query); url.searchParams.set('count', '5');
+  url.searchParams.set('language', 'en'); url.searchParams.set('format', 'json');
+  const response = await fetch(url);
+  if(!response.ok) throw new Error('Location lookup failed (' + response.status + ')');
+  const data = await response.json();
+  if(!data.results || !data.results.length) throw new Error('No matching place found');
+  const exactRegion = query.split(',')[1]?.trim().toLowerCase();
+  return (exactRegion && data.results.find(r => (r.admin1 || '').toLowerCase() === exactRegion)) || data.results[0];
+}
+async function readWeather(lat, lon, placeLabel, suppliedToken){
+  const requestToken = suppliedToken || weatherGate.begin();
+  setWeatherStatus('Reading the sky over ' + placeLabel + '…', 'loading');
+  const response = await fetch(VesperWeatherCore.buildForecastUrl(lat, lon, weatherUnit));
+  if(!weatherGate.isLatest(requestToken)) return false;
+  if(!response.ok) throw new Error('Weather lookup failed (' + response.status + ')');
+  const data = await response.json();
+  if(!weatherGate.isLatest(requestToken)) return false;
+  if(!data.current) throw new Error('Current conditions were missing');
+  const cur = data.current;
+  const appearance = VesperWeatherCore.resolveVesperAppearance({ weatherCode:cur.weather_code, isDay:cur.is_day, windKmh:cur.wind_speed_10m });
+  const nextState = appearance.state;
+  currentPlace = { lat, lon, label:placeLabel };
+  setState(nextState, appearance.isNight);
+  const degree = weatherUnit === 'celsius' ? '°C' : '°F';
+  weatherReadout.className = 'weather-readout';
+  weatherReadout.innerHTML = '<strong></strong> · <span class="state"></span> · <span></span>';
+  weatherReadout.querySelector('strong').textContent = placeLabel;
+  weatherReadout.querySelector('.state').textContent = nextState + (appearance.isNight ? ' · night' : ' · day');
+  weatherReadout.querySelector('span:last-child').textContent = Math.round(cur.temperature_2m) + degree + ' · wind ' + Math.round(cur.wind_speed_10m) + ' km/h · WMO ' + cur.weather_code;
+  return true;
+}
+async function submitPlace(event){
+  event.preventDefault();
+  const query = placeInput.value.trim();
+  if(!query){ placeInput.focus(); return; }
+  const requestToken = weatherGate.begin();
+  setWeatherStatus('Finding ' + query + '…', 'loading');
+  try{
+    const result = await geocodePlace(query);
+    if(!weatherGate.isLatest(requestToken)) return;
+    const label = VesperWeatherCore.formatPlace(result);
+    await readWeather(result.latitude, result.longitude, label, requestToken);
+  }catch(error){ if(weatherGate.isLatest(requestToken)) setWeatherStatus(error.message + '. Try “City, State”.', 'error'); }
+}
+function locateMe(){
+  if(!navigator.geolocation){ setWeatherStatus('This browser does not offer geolocation.', 'error'); return; }
+  setWeatherStatus('Waiting for explicit location permission…', 'loading');
+  navigator.geolocation.getCurrentPosition(
+    pos => readWeather(pos.coords.latitude, pos.coords.longitude, 'Current location').catch(error => setWeatherStatus(error.message, 'error')),
+    () => setWeatherStatus('Location was unavailable or declined. Typed places still work.', 'error'),
+    { enableHighAccuracy:false, timeout:10000, maximumAge:300000 }
+  );
+}
+
+function buildBatchUrl(points){
+  const url = new URL('https://api.open-meteo.com/v1/forecast');
+  url.searchParams.set('latitude', points.map(p => p.lat).join(','));
+  url.searchParams.set('longitude', points.map(p => p.lon).join(','));
+  url.searchParams.set('current', 'temperature_2m,weather_code,wind_speed_10m,is_day');
+  url.searchParams.set('temperature_unit', weatherUnit);
+  url.searchParams.set('wind_speed_unit', 'kmh');
+  url.searchParams.set('timezone', 'auto');
+  return url.toString();
+}
+
+async function fetchDiscoveryChunk(points){
+  const response = await fetch(buildBatchUrl(points));
+  if(!response.ok) throw new Error('Live-state survey failed (' + response.status + ')');
+  const payload = await response.json();
+  const rows = Array.isArray(payload) ? payload : [payload];
+  return rows.map((row, index) => ({
+    ...points[index],
+    weatherCode:row.current.weather_code,
+    windKmh:row.current.wind_speed_10m,
+    isDay:row.current.is_day,
+    temperature:row.current.temperature_2m
+  }));
+}
+
+function renderLiveExamples(examples, scanned){
+  const picker = $('livePicker');
+  picker.innerHTML = '';
+  const order = ['clear','night','rainy','snowy','stormy','windy'];
+  for(const state of order){
+    const point = examples[state];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'live-example' + (point ? '' : ' missing');
+    if(point){
+      button.innerHTML = '<b></b> · <span></span>';
+      button.querySelector('b').textContent = state;
+      button.querySelector('span').textContent = point.label;
+      button.title = Math.round(point.temperature) + (weatherUnit === 'celsius' ? '°C' : '°F') + ' · wind ' + Math.round(point.windKmh) + ' km/h · WMO ' + point.weatherCode;
+      button.addEventListener('click', () => {
+        placeInput.value = point.label;
+        readWeather(point.lat, point.lon, point.label).catch(error => setWeatherStatus(error.message, 'error'));
+      });
+    }else{
+      button.textContent = state + ' · not found now';
+      button.disabled = true;
+    }
+    picker.appendChild(button);
+  }
+  const note = document.createElement('div');
+  note.className = 'discovery-note';
+  note.textContent = 'Live Open-Meteo survey · ' + scanned + ' global points · refreshes when pressed';
+  picker.appendChild(note);
+  picker.hidden = false;
+  body.classList.add('live-discovered');
+}
+
+async function discoverLiveStates(){
+  const button = $('discoverBtn');
+  button.disabled = true;
+  button.textContent = 'Scanning Sky…';
+  setWeatherStatus('Surveying current conditions around the world…', 'loading');
+  try{
+    const points = VesperWeatherCore.buildDiscoveryPoints();
+    const chunks = [];
+    for(let i = 0; i < points.length; i += 24) chunks.push(points.slice(i, i + 24));
+    const rows = (await Promise.all(chunks.map(fetchDiscoveryChunk))).flat();
+    const examples = VesperWeatherCore.chooseLiveExamples(rows);
+    renderLiveExamples(examples, rows.length);
+    const count = Object.keys(examples).length;
+    setWeatherStatus('Found ' + count + ' of 6 Vesper states in current conditions. Pick one below.');
+  }catch(error){
+    setWeatherStatus(error.message + '. Typed places still work.', 'error');
+  }finally{
+    button.disabled = false;
+    button.textContent = 'Find Live States';
+  }
+}
+
+$('placeForm').addEventListener('submit', submitPlace);
+$('geoBtn').addEventListener('click', locateMe);
+$('discoverBtn').addEventListener('click', discoverLiveStates);
+$('unitBtn').textContent = weatherUnit === 'celsius' ? '°C' : '°F';
+$('unitBtn').addEventListener('click', function(){
+  weatherUnit = weatherUnit === 'celsius' ? 'fahrenheit' : 'celsius';
+  localStorage.setItem('vesper-weather-unit', weatherUnit);
+  this.textContent = weatherUnit === 'celsius' ? '°C' : '°F';
+  if(currentPlace) readWeather(currentPlace.lat, currentPlace.lon, currentPlace.label).catch(error => setWeatherStatus(error.message, 'error'));
+});
+$('deformBtn').addEventListener('click', function(){
+  eng.deform = !eng.deform;
+  this.setAttribute('aria-pressed', eng.deform ? 'true' : 'false');
+  this.textContent = 'Deformation: ' + (eng.deform ? 'On' : 'Off');
+  if(!eng.deform) sqDisp.setAttribute('scale', '0');
+});
+$('pauseBtn').addEventListener('click', function(){
+  eng.paused = !eng.paused;
+  this.setAttribute('aria-pressed', eng.paused ? 'true' : 'false');
+  this.textContent = eng.paused ? 'Resume Motion' : 'Pause Motion';
+});
+function vesperSpeak(){
+  const lineState = (eng.state === 'clear' && eng.isNight) ? 'night' : eng.state;
+  say(pick(LINES[lineState]));
+}
+figureEl.addEventListener('click', vesperSpeak);
+figureEl.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); vesperSpeak(); } });
+
+/* ============ main loop ============ */
+let last = -1, frame = 0;
+function tick(now){
+  requestAnimationFrame(tick);
+  if(last < 0){ last = now; return; }
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  frame++;
+
+  if(!eng.paused && !eng.reduced){
+    const profileState = VesperWeatherCore.selectMotionProfile(eng.state, eng.isNight);
+    body.dataset.motionProfile = profileState;
+    const P = PROFILES[profileState];
+    eng.ampX = smoothTo(eng.ampX, P.ampX, dt, 1.4);
+    eng.ampY = smoothTo(eng.ampY, P.ampY, dt, 1.4);
+    eng.ampR = smoothTo(eng.ampR, P.ampR, dt, 1.4);
+    eng.ampS = smoothTo(eng.ampS, P.ampS, dt, 1.4);
+    eng.tempo = smoothTo(eng.tempo, P.tempo, dt, 1.4);
+    eng.still = smoothTo(eng.still, P.still, dt, 1.4);
+    eng.squish = smoothTo(eng.squish, P.squish, dt, 1.4);
+    eng.jitter = smoothTo(eng.jitter, P.jitter, dt, 1.4);
+    eng.simT += dt * eng.tempo;
+
+    const gate = fbm(eng.simT * 0.027 + 500.7, 2);
+    const th = -0.34 + eng.still * 0.62;
+    if(eng.mode === 'active'){ if(gate < th){ eng.mode = 'still'; eng.stillUntil = eng.simT + rand(4, 12); } }
+    else if(eng.simT > eng.stillUntil && gate > th){ eng.mode = 'active'; }
+    const pTgt = eng.mode === 'still' ? 0 : 1;
+    eng.presence = smoothTo(eng.presence, pTgt, dt, pTgt < eng.presence ? 0.7 : 2.1);
+
+    for(const key in CHANNELS){
+      const c = CHANNELS[key];
+      const raw = shape(fbm(eng.simT / c.period + c.off, 3));
+      const st = eng.ch[key];
+      st.v = smoothTo(st.v, raw, dt, raw > st.v ? 0.35 : 1.1);
+    }
+
+    const pres = eng.presence;
+    let jitX = 0, jitY = 0;
+    if(eng.jitter > 0.01){
+      jitX = nz(eng.simT * 9.1 + 3.3) * eng.jitter * (0.35 + 0.65 * pres);
+      jitY = nz(eng.simT * 8.3 + 9.9) * eng.jitter * (0.35 + 0.65 * pres);
+    }
+    eng.px = eng.x; eng.py = eng.y;
+    eng.x = eng.ch.x.v * eng.ampX * pres + jitX;
+    eng.y = eng.ch.y.v * eng.ampY * pres + jitY;
+    eng.r = eng.ch.r.v * eng.ampR * pres;
+    eng.sc = 1 + eng.ch.s.v * eng.ampS * pres;
+    eng.speed = Math.hypot(eng.x - eng.px, eng.y - eng.py) / Math.max(dt, 0.001);
+
+    figureEl.style.transform =
+      'translate(-50%,-50%) translate(' + eng.x.toFixed(2) + 'px,' + eng.y.toFixed(2) + 'px) rotate(' +
+      eng.r.toFixed(3) + 'deg) scale(' + eng.sc.toFixed(4) + ')';
+    haloEl.style.transform = 'translate(-50%,-50%) translate(' + (eng.x * 0.3).toFixed(1) + 'px,' + (eng.y * 0.3).toFixed(1) + 'px)';
+    shadowEl.style.opacity = (0.85 * (1 - Math.min(1, Math.abs(eng.y) / 12))).toFixed(2);
+
+    if(eng.deform){
+      const spd = Math.min(1, eng.speed / 60);
+      sqDisp.setAttribute('scale', (eng.squish * (0.45 + 0.55 * pres) * (1 + spd * 0.7)).toFixed(2));
+      sqTurb.setAttribute('baseFrequency', (0.009 + 0.004 * (0.5 + 0.5 * Math.sin(eng.simT * 0.35))).toFixed(4));
+    }
+
+    if(eng.state === 'stormy'){
+      eng.nextFlash -= dt;
+      if(eng.nextFlash <= 0){
+        eng.flash = 0.9;
+        eng.nextFlash = rand(3.5, 9);
+        if(Math.random() < 0.25) setTimeout(() => say(pick(['…loud.','the sky is shouting again.','noted. thunder. very dramatic.'])), 300);
+      }
+    }
+    if(eng.flash > 0.001){ eng.flash *= Math.exp(-dt * 7); flashEl.style.opacity = eng.flash.toFixed(3); }
+    else if(flashEl.style.opacity !== '0'){ flashEl.style.opacity = '0'; }
+
+    updateParticles(dt);
+  }
+
+  const acc = drawParticles();
+  drawScope(acc);
+
+  if(frame % 8 === 0 && !eng.reduced){
+    hudX.textContent = (eng.x >= 0 ? '+' : '') + eng.x.toFixed(1) + ' px';
+    hudY.textContent = (eng.y >= 0 ? '+' : '') + eng.y.toFixed(1) + ' px';
+    hudR.textContent = (eng.r >= 0 ? '+' : '') + eng.r.toFixed(2) + '°';
+    hudS.textContent = eng.sc.toFixed(3);
+    hudMode.textContent = eng.reduced ? 'REDUCED' : (eng.paused ? 'PAUSED' : (eng.mode === 'still' ? 'STILLNESS' : 'ACTIVE'));
+    hudSq.textContent = eng.deform ? (sqDisp.getAttribute('scale') || '0') + ' px' : 'off';
+  }
+}
+
+/* ============ seat the first body, then speak ============ */
+fillLayer(front, 'clear');
+const firstBody = front.querySelector('img,svg');
+if(firstBody) firstBody.classList.add('night-tint');
+front.style.opacity = 1;
+requestAnimationFrame(tick);
+setTimeout(() => say("name a place. i’ll see what the sky makes of me."), 1100);
+})();
+</script>
+</body>
+</html>

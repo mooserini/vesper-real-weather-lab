@@ -1,0 +1,27 @@
+# macOS and editor debris
+.DS_Store
+._*
+*.swp
+*.swo
+*~
+
+# Local servers and logs
+*.log
+*.pid
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies and generated output
+node_modules/
+coverage/
+dist/
+build/
+
+# IDE metadata
+.vscode/
+.idea/
