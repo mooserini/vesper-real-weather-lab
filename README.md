@@ -79,9 +79,23 @@ package.json          Canonical test/lint/verification commands
 assets/               Six canonical Vesper PNG assets
 ```
 
+## Cloudflare review deployment
+
+The current verified frontend is published for external review at:
+
+```text
+https://vesper-real-weather-lab.pages.dev/
+```
+
+Cloudflare Pages receives a deliberately minimal static review bundle: `index.html`,
+`weather-core.js`, and the six canonical PNG assets. Deployment is a manual,
+version-pinned Wrangler operation after `npm run verify`; the repository contains
+no Cloudflare credentials, account identifiers, analytics, backend, or automatic
+deployment workflow.
+
 ## Repository status
 
-This is the official private source repository for current Vesper real-weather development. It is not wired to deployment and does not contain historical creative receipts. Earlier frozen snapshots remain outside this repository by design.
+This is the official private source repository for current Vesper real-weather development. The Cloudflare Pages site is a public review surface, not an independent editable authority. Historical creative receipts and earlier frozen snapshots remain outside this repository by design.
 
 ## Rights and publication
 
