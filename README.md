@@ -2,7 +2,7 @@
 
 A browser-based experiential prototype in which current weather chooses Vesper’s body, atmosphere, motion profile, and lighting.
 
-This repository candidate is standalone and client-side. It contains no credentials, account configuration, deployment automation, analytics, backend, or private infrastructure information.
+This public repository is standalone and client-side. It contains no credentials, account configuration, deployment automation, analytics, backend, or private infrastructure information.
 
 ## Experience
 
@@ -13,6 +13,10 @@ This repository candidate is standalone and client-side. It contains no credenti
 - Pause ambient motion or enable optional SVG deformation.
 
 Open-Meteo supplies geocoding and current conditions without a project API key.
+Typed location searches and coordinates you explicitly approve are sent directly
+from your browser to Open-Meteo. Vesper has no owner-operated backend or
+analytics and stores only your temperature-unit preference in browser local
+storage.
 
 ## State model
 
@@ -41,7 +45,8 @@ Then open:
 http://127.0.0.1:8765/
 ```
 
-The page loads two font stylesheets from jsDelivr and current weather from Open-Meteo, so those features require network access.
+The page loads version-pinned font stylesheets from jsDelivr and current weather
+from Open-Meteo, so those features require network access.
 
 ## Verify
 
@@ -95,7 +100,10 @@ deployment workflow.
 
 ## Repository status
 
-This is the official private source repository for current Vesper real-weather development. The Cloudflare Pages site is a public review surface, not an independent editable authority. Historical creative receipts and earlier frozen snapshots remain outside this repository by design.
+This is the official public source repository for current Vesper real-weather
+development. The Cloudflare Pages site is a public review surface, not an
+independent editable authority. Historical creative receipts and earlier frozen
+snapshots remain outside this repository by design.
 
 ## Rights and publication
 

@@ -2,7 +2,9 @@
 
 ## Source boundary
 
-This private repository was prepared from the active Vesper real-weather laboratory on 2026-08-13 and promoted to the official off-hardware source after review and verification.
+This repository was prepared from the active Vesper real-weather laboratory on
+2026-08-13, promoted to the official off-hardware source after review and
+verification, and deliberately made public later that day.
 
 Included:
 
@@ -24,7 +26,8 @@ Excluded intentionally:
 
 ## Source of truth
 
-The private GitHub repository `mooserini/vesper-real-weather-lab` is the official source of truth for current development.
+The public GitHub repository `mooserini/vesper-real-weather-lab` is the official
+source of truth for current development.
 
 Local Desktop laboratories and frozen snapshots remain valuable history and visual evidence, but they are not independent editable authorities. New work should begin from the repository or an up-to-date clone, pass `npm run verify`, and return through Git history.
 
